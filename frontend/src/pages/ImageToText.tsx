@@ -78,7 +78,8 @@ export default function ImageToText() {
 
     try {
       const dataUrl = await fileToDataUrl(file);
-      const res = await fetch("/api/caption", {
+      const apiBase = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
+      const res = await fetch(`${apiBase}/api/caption`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

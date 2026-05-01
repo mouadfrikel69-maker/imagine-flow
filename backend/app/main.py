@@ -4,8 +4,10 @@ Keeps the API key server-side. Frontend talks to /api/caption.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -15,11 +17,36 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger("imagine-flow")
 logging.basicConfig(level=logging.INFO)
 
+
+def _load_api_key() -> str:
+    """Read the Pollinations API key from env, or a runtime config file.
+
+    The runtime config file lets us bundle a key into a deployed Docker image
+    without committing it to git. Path is overridable via
+    ``POLLINATIONS_KEY_FILE``.
+    """
+    key = os.getenv("POLLINATIONS_API_KEY", "").strip()
+    if key:
+        return key
+
+    config_path = Path(
+        os.getenv("POLLINATIONS_KEY_FILE")
+        or Path(__file__).parent / "_runtime_config.json"
+    )
+    if config_path.is_file():
+        try:
+            data = json.loads(config_path.read_text())
+            return str(data.get("POLLINATIONS_API_KEY", "")).strip()
+        except (OSError, ValueError) as exc:
+            logger.warning("Failed to load %s: %s", config_path, exc)
+    return ""
+
+
 POLLINATIONS_BASE_URL = os.getenv(
     "POLLINATIONS_BASE_URL", "https://gen.pollinations.ai"
 )
 POLLINATIONS_VISION_MODEL = os.getenv("POLLINATIONS_VISION_MODEL", "openai")
-POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "").strip()
+POLLINATIONS_API_KEY = _load_api_key()
 
 DEFAULT_INSTRUCTION = (
     "Describe this image in 2-3 vivid, accurate sentences. "

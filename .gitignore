@@ -29,12 +29,12 @@ dist-ssr
 *.sln
 *.sw?
 
-# Env
+# Env (.env.production is checked in because it only contains the public
+# backend URL — never put secrets there)
 .env
 .env.local
 .env.*.local
 .env.development
-.env.production
 
 # Python
 __pycache__/
@@ -50,3 +50,6 @@ venv/
 # Fly.io / deploy artifacts
 .fly/
 fly.toml.local
+
+# Runtime secrets bundled into docker images (never commit)
+**/_runtime_config.json
