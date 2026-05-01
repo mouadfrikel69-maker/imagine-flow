@@ -48,10 +48,10 @@ export default function TextToImage() {
     });
   };
 
+  const apiBase = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
   const imageUrl = submitted
-    ? `https://image.pollinations.ai/prompt/${encodeURIComponent(
-        submitted.prompt,
-      )}?width=${submitted.w}&height=${submitted.h}&seed=${submitted.seed}&nologo=true`
+    ? `${apiBase}/api/image?prompt=${encodeURIComponent(submitted.prompt)}` +
+      `&width=${submitted.w}&height=${submitted.h}&seed=${submitted.seed}`
     : null;
 
   return (

@@ -5,23 +5,19 @@ import { ImageIcon, Type, Sparkles } from "lucide-react";
 const samples = [
   {
     prompt: "an astronaut riding a horse on mars, cinematic, hyper-detailed",
-    image:
-      "https://image.pollinations.ai/prompt/an%20astronaut%20riding%20a%20horse%20on%20mars%2C%20cinematic%2C%20hyper-detailed?width=512&height=512&nologo=true&seed=42",
+    image: "/demos/astronaut.jpg",
   },
   {
     prompt: "a neon cyberpunk fox in a rainy tokyo alley, photorealistic",
-    image:
-      "https://image.pollinations.ai/prompt/a%20neon%20cyberpunk%20fox%20in%20a%20rainy%20tokyo%20alley%2C%20photorealistic?width=512&height=512&nologo=true&seed=7",
+    image: "/demos/cyber-fox.jpg",
   },
   {
     prompt: "a cozy cottage in an enchanted forest at golden hour, studio ghibli",
-    image:
-      "https://image.pollinations.ai/prompt/a%20cozy%20cottage%20in%20an%20enchanted%20forest%20at%20golden%20hour%2C%20studio%20ghibli?width=512&height=512&nologo=true&seed=12",
+    image: "/demos/cottage.jpg",
   },
   {
     prompt: "a crystal dragon perched on a mountain peak, fantasy concept art",
-    image:
-      "https://image.pollinations.ai/prompt/a%20crystal%20dragon%20perched%20on%20a%20mountain%20peak%2C%20fantasy%20concept%20art?width=512&height=512&nologo=true&seed=99",
+    image: "/demos/dragon.jpg",
   },
 ];
 

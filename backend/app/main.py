@@ -9,9 +9,12 @@ import logging
 import os
 from pathlib import Path
 
+from urllib.parse import quote
+
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger("imagine-flow")
@@ -46,6 +49,7 @@ POLLINATIONS_BASE_URL = os.getenv(
     "POLLINATIONS_BASE_URL", "https://gen.pollinations.ai"
 )
 POLLINATIONS_VISION_MODEL = os.getenv("POLLINATIONS_VISION_MODEL", "openai")
+POLLINATIONS_IMAGE_MODEL = os.getenv("POLLINATIONS_IMAGE_MODEL", "flux")
 POLLINATIONS_API_KEY = _load_api_key()
 
 DEFAULT_INSTRUCTION = (
@@ -168,3 +172,57 @@ async def caption(req: CaptionRequest) -> CaptionResponse:
         ) from e
 
     return CaptionResponse(caption=text.strip(), model=model)
+
+
+@app.get("/api/image")
+async def generate_image(
+    prompt: str = Query(..., min_length=1, max_length=2000),
+    width: int = Query(1024, ge=64, le=2048),
+    height: int = Query(1024, ge=64, le=2048),
+    seed: int = Query(0, ge=0, le=2_147_483_647),
+    model: str | None = Query(None),
+) -> Response:
+    """Proxy text→image generation through the authenticated Pollinations gateway.
+
+    Routing through the backend lets us attach the API key without exposing it
+    to the browser, and bypasses the per-IP queue limits of the anonymous tier.
+    """
+    if not POLLINATIONS_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Server is missing POLLINATIONS_API_KEY.",
+        )
+
+    chosen_model = (model or POLLINATIONS_IMAGE_MODEL).strip() or "flux"
+    base = POLLINATIONS_BASE_URL.rstrip("/")
+    url = f"{base}/image/{quote(prompt, safe='')}"
+    params = {
+        "model": chosen_model,
+        "width": width,
+        "height": height,
+        "seed": seed,
+        "nologo": "true",
+    }
+    headers = {"Authorization": f"Bearer {POLLINATIONS_API_KEY}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.get(url, params=params, headers=headers)
+    except httpx.HTTPError as e:
+        logger.exception("Pollinations image request failed")
+        raise HTTPException(status_code=502, detail=f"Upstream request failed: {e}") from e
+
+    if resp.status_code >= 400:
+        logger.warning(
+            "Pollinations image error %s: %s", resp.status_code, resp.text[:300]
+        )
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail=f"Pollinations error: {resp.text[:300]}",
+        )
+
+    return Response(
+        content=resp.content,
+        media_type=resp.headers.get("content-type", "image/jpeg"),
+        headers={"Cache-Control": "public, max-age=3600"},
+    )

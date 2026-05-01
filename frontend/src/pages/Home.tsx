@@ -141,18 +141,18 @@ export default function Home() {
           {[
             {
               prompt: "a tiny astronaut floating in a teacup, isometric 3d",
-              seed: 21,
+              image: "/demos/teacup-astronaut.jpg",
             },
             {
               prompt: "a vintage analog synthesizer underwater, dreamy lighting",
-              seed: 88,
+              image: "/demos/synth.jpg",
             },
             {
               prompt: "a paper-craft city at night with glowing windows",
-              seed: 314,
+              image: "/demos/papercraft.jpg",
             },
-          ].map(({ prompt, seed }) => (
-            <ExampleCard key={prompt} prompt={prompt} seed={seed} />
+          ].map(({ prompt, image }) => (
+            <ExampleCard key={prompt} prompt={prompt} image={image} />
           ))}
         </div>
       </section>
@@ -190,11 +190,7 @@ export default function Home() {
   );
 }
 
-function ExampleCard({ prompt, seed }: { prompt: string; seed: number }) {
-  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(
-    prompt,
-  )}?width=512&height=512&nologo=true&seed=${seed}`;
-
+function ExampleCard({ prompt, image }: { prompt: string; image: string }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -206,7 +202,7 @@ function ExampleCard({ prompt, seed }: { prompt: string; seed: number }) {
       <div className="aspect-square overflow-hidden bg-black/40 relative">
         <div className="absolute inset-0 shimmer" />
         <img
-          src={url}
+          src={image}
           alt={prompt}
           loading="lazy"
           className="relative h-full w-full object-cover transition-opacity duration-500"
