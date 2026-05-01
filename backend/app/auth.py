@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status  # noqa: F401  (Depends re-exported below)
 from firebase_admin import auth as firebase_auth
 from google.cloud.firestore import SERVER_TIMESTAMP
 
@@ -74,9 +74,18 @@ def _ensure_profile(uid: str, decoded: dict) -> dict:
     return initial
 
 
-async def current_user(
+def current_user(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> CurrentUser:
+    """FastAPI dependency: verify the Firebase ID token and load the profile.
+
+    Declared as a regular ``def`` (not ``async def``) on purpose:
+    Firebase Admin's ``verify_id_token`` and Firestore ``get`` / ``set`` are
+    synchronous network calls. If we declared this ``async def`` FastAPI
+    would run it directly on the event loop, blocking every concurrent
+    request for the duration of the round-trip. As a sync def, FastAPI
+    runs it in its threadpool and the event loop stays responsive.
+    """
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
     token = authorization.split(" ", 1)[1].strip()

@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { View } from "react-native";
 import Animated, {
   Easing,
+  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -28,10 +29,12 @@ export function OnboardingProgress({
       1,
       { duration: durationMs, easing: Easing.out(Easing.cubic) },
       (finished) => {
+        "worklet";
+        // Reanimated finish callback runs on the UI thread (worklet context).
+        // requestAnimationFrame doesn't exist there — runOnJS bounces back
+        // onto the JS thread so React state updates / navigation work.
         if (finished && onDone) {
-          // Reanimated finish callback runs on UI thread; bounce to JS.
-          // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-          requestAnimationFrame(() => onDone());
+          runOnJS(onDone)();
         }
       }
     );

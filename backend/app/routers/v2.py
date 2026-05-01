@@ -27,7 +27,7 @@ from ..pollinations import (
     caption_image,
     fetch_generated_image,
 )
-from ..quota import get_usage, increment_usage
+from ..quota import QuotaExceeded, release_slot, reserve_slot
 
 logger = logging.getLogger("imagine-flow.v2")
 router = APIRouter(prefix="/api/v2", tags=["v2"])
@@ -59,13 +59,22 @@ def pick_key(user: CurrentUser) -> str:
     return decrypt_key(user.pollinations_api_key)  # 20/day with their own key
 
 
-def _enforce_quota(user: CurrentUser) -> None:
-    used = get_usage(user.uid)
-    if used >= user.daily_limit:
+def _reserve_quota(user: CurrentUser) -> None:
+    """Race-safe quota check + reservation.
+
+    Atomically increments the user's daily counter inside a Firestore
+    transaction. If we've already hit the limit the transaction raises
+    :class:`QuotaExceeded` and we surface a 429 to the client *without*
+    incrementing. This must be paired with :func:`release_slot` if the
+    downstream API call later fails.
+    """
+    try:
+        reserve_slot(user.uid, user.daily_limit)
+    except QuotaExceeded as exc:
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
             f"Daily limit reached ({user.daily_limit}/day). Try again tomorrow.",
-        )
+        ) from exc
 
 
 class GenerateImageRequest(BaseModel):
@@ -80,7 +89,9 @@ class GenerateImageRequest(BaseModel):
 async def generate_image(
     req: GenerateImageRequest, user: CurrentUser = CurrentUserDep
 ) -> Response:
-    _enforce_quota(user)
+    # Reserve a slot atomically *before* the upstream call so concurrent
+    # requests can't all observe the same usage and bypass the limit.
+    _reserve_quota(user)
     key = pick_key(user)
     try:
         image_bytes, content_type = await fetch_generated_image(
@@ -92,18 +103,24 @@ async def generate_image(
             model=req.model or POLLINATIONS_IMAGE_MODEL,
         )
     except httpx.HTTPStatusError as exc:
+        # Roll back the reservation — the user got nothing useful, so don't
+        # charge them for it.
+        release_slot(user.uid)
         logger.warning("Pollinations image error: %s", exc)
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
             f"Pollinations error: {exc.response.text[:300]}",
         ) from exc
     except httpx.HTTPError as exc:
+        release_slot(user.uid)
         logger.exception("Pollinations image request failed")
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, f"Upstream request failed: {exc}"
         ) from exc
+    except Exception:
+        release_slot(user.uid)
+        raise
 
-    increment_usage(user.uid)
     return Response(
         content=image_bytes,
         media_type=content_type,
@@ -133,7 +150,8 @@ async def caption(
             status.HTTP_400_BAD_REQUEST,
             "image_data_url must be a base64 data URL (data:image/...).",
         )
-    _enforce_quota(user)
+    # Reserve atomically before the upstream call (see generate_image).
+    _reserve_quota(user)
     key = pick_key(user)
     instruction = (req.instruction or DEFAULT_INSTRUCTION).strip()
     model = (req.model or POLLINATIONS_VISION_MODEL).strip() or "openai"
@@ -145,16 +163,20 @@ async def caption(
             model=model,
         )
     except httpx.HTTPStatusError as exc:
+        release_slot(user.uid)
         logger.warning("Pollinations caption error: %s", exc)
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
             f"Pollinations error: {exc.response.text[:300]}",
         ) from exc
     except httpx.HTTPError as exc:
+        release_slot(user.uid)
         logger.exception("Pollinations caption request failed")
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, f"Upstream request failed: {exc}"
         ) from exc
+    except Exception:
+        release_slot(user.uid)
+        raise
 
-    increment_usage(user.uid)
     return CaptionResponseV2(caption=text, model=model)
