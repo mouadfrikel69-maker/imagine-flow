@@ -92,8 +92,10 @@ async def generate_image(
     # Reserve a slot atomically *before* the upstream call so concurrent
     # requests can't all observe the same usage and bypass the limit.
     _reserve_quota(user)
-    key = pick_key(user)
     try:
+        # pick_key() can raise (missing DEV key, rotated MASTER_KEY) — keep
+        # it inside the try so the catch-all branch releases the slot.
+        key = pick_key(user)
         image_bytes, content_type = await fetch_generated_image(
             api_key=key,
             prompt=req.prompt,
@@ -152,10 +154,12 @@ async def caption(
         )
     # Reserve atomically before the upstream call (see generate_image).
     _reserve_quota(user)
-    key = pick_key(user)
-    instruction = (req.instruction or DEFAULT_INSTRUCTION).strip()
-    model = (req.model or POLLINATIONS_VISION_MODEL).strip() or "openai"
     try:
+        # pick_key() can raise — keep inside the try so the catch-all
+        # branch releases the slot.
+        key = pick_key(user)
+        instruction = (req.instruction or DEFAULT_INSTRUCTION).strip()
+        model = (req.model or POLLINATIONS_VISION_MODEL).strip() or "openai"
         text = await caption_image(
             api_key=key,
             image_data_url=req.image_data_url,
