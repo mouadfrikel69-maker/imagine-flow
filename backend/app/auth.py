@@ -1,0 +1,104 @@
+"""Firebase ID-token verification + user profile loading.
+
+Mobile/web clients send ``Authorization: Bearer <Firebase ID token>``. We verify
+it with the Firebase Admin SDK, then look up (or create) the user's profile
+document in Firestore.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+from fastapi import Depends, Header, HTTPException, status
+from firebase_admin import auth as firebase_auth
+from google.cloud.firestore import SERVER_TIMESTAMP
+
+from .firebase_app import get_firestore
+
+AuthMethod = Literal["google", "email", "pollinations"]
+
+
+@dataclass
+class CurrentUser:
+    uid: str
+    email: str | None
+    name: str | None
+    auth_method: AuthMethod
+    pollinations_api_key: str | None  # Fernet-encrypted blob (or None)
+    dismissed_pollinations_upsell: bool
+
+    @property
+    def daily_limit(self) -> int:
+        return 20 if self.auth_method == "pollinations" else 6
+
+
+def _decode_token(token: str) -> dict:
+    try:
+        return firebase_auth.verify_id_token(token, check_revoked=False)
+    except firebase_auth.RevokedIdTokenError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token revoked") from exc
+    except firebase_auth.ExpiredIdTokenError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token expired") from exc
+    except firebase_auth.InvalidIdTokenError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Invalid token: {exc}") from exc
+    except Exception as exc:  # pragma: no cover - defensive
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Auth failed: {exc}") from exc
+
+
+def _detect_auth_method(decoded: dict) -> AuthMethod:
+    """Infer the initial auth method from Firebase's sign-in provider claim."""
+    sign_in_provider = (decoded.get("firebase") or {}).get("sign_in_provider", "")
+    if sign_in_provider == "google.com":
+        return "google"
+    return "email"
+
+
+def _ensure_profile(uid: str, decoded: dict) -> dict:
+    db = get_firestore()
+    ref = db.collection("user_profile").document(uid)
+    snap = ref.get()
+    if snap.exists:
+        return snap.to_dict() or {}
+
+    # First time we've seen this user — create their profile row.
+    initial = {
+        "uid": uid,
+        "email": decoded.get("email"),
+        "name": decoded.get("name"),
+        "auth_method": _detect_auth_method(decoded),
+        "pollinations_api_key": None,
+        "dismissed_pollinations_upsell": False,
+        "created_at": SERVER_TIMESTAMP,
+    }
+    ref.set(initial)
+    return initial
+
+
+async def current_user(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> CurrentUser:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Empty token")
+
+    decoded = _decode_token(token)
+    uid = decoded.get("uid") or decoded.get("sub")
+    if not uid:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token has no uid")
+
+    profile = _ensure_profile(uid, decoded)
+    return CurrentUser(
+        uid=uid,
+        email=profile.get("email") or decoded.get("email"),
+        name=profile.get("name") or decoded.get("name"),
+        auth_method=profile.get("auth_method", "email"),
+        pollinations_api_key=profile.get("pollinations_api_key"),
+        dismissed_pollinations_upsell=bool(
+            profile.get("dismissed_pollinations_upsell", False)
+        ),
+    )
+
+
+CurrentUserDep = Depends(current_user)

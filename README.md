@@ -19,9 +19,17 @@ proxy on the backend, all powered by [Pollinations.ai](https://pollinations.ai).
 
 ```
 imagine-flow/
-├── frontend/   # Vite + React + TS + Tailwind + Framer Motion
-└── backend/    # FastAPI proxy for Pollinations vision (image → text)
+├── frontend/   # Vite + React + TS + Tailwind + Framer Motion (web)
+├── mobile/     # React Native + Expo Android app (Firebase Auth + 2-tier quota)
+└── backend/    # FastAPI proxy + auth-gated v2 routes for the mobile app
 ```
+
+The web frontend and the mobile app share the same FastAPI backend. The web
+app keeps using the original `/api/caption` and `/api/image` endpoints
+(no auth, single shared API key); the mobile app uses the newer auth-gated
+`/api/v2/*` endpoints with per-user daily quotas.
+
+See [`mobile/README.md`](./mobile/README.md) for Firebase + Expo setup.
 
 ## Local development
 
