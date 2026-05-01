@@ -38,11 +38,12 @@ export default function TextToImage() {
   };
 
   const reroll = () => {
-    setSeed(Math.floor(Math.random() * 99999));
+    const newSeed = Math.floor(Math.random() * 99999);
+    setSeed(newSeed);
     setLoading(true);
     setSubmitted({
       prompt: prompt.trim(),
-      seed: Math.floor(Math.random() * 99999),
+      seed: newSeed,
       w: size.w,
       h: size.h,
     });

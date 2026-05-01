@@ -48,6 +48,9 @@ def _load_api_key() -> str:
 POLLINATIONS_BASE_URL = os.getenv(
     "POLLINATIONS_BASE_URL", "https://gen.pollinations.ai"
 )
+POLLINATIONS_IMAGE_BASE_URL = os.getenv(
+    "POLLINATIONS_IMAGE_BASE_URL", "https://image.pollinations.ai"
+)
 POLLINATIONS_VISION_MODEL = os.getenv("POLLINATIONS_VISION_MODEL", "openai")
 POLLINATIONS_IMAGE_MODEL = os.getenv("POLLINATIONS_IMAGE_MODEL", "flux")
 POLLINATIONS_API_KEY = _load_api_key()
@@ -209,8 +212,8 @@ async def generate_image(
         )
 
     chosen_model = (model or POLLINATIONS_IMAGE_MODEL).strip() or "flux"
-    base = POLLINATIONS_BASE_URL.rstrip("/")
-    url = f"{base}/image/{quote(prompt, safe='')}"
+    base = POLLINATIONS_IMAGE_BASE_URL.rstrip("/")
+    url = f"{base}/prompt/{quote(prompt, safe='')}"
     params = {
         "model": chosen_model,
         "width": width,
