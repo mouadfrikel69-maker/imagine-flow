@@ -6,13 +6,14 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install runtime deps
+# Install runtime deps from pyproject so adding a dep doesn't require touching
+# the Dockerfile. The single `pip install -e .` resolves them all.
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir "fastapi[standard]>=0.115.0" "uvicorn[standard]>=0.32.0" "httpx>=0.27.0" "pydantic>=2.9.0"
-
 COPY app ./app
 COPY *.json* ./
+RUN pip install --no-cache-dir -e .
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Render injects $PORT at runtime; default to 8000 locally.
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

@@ -57,7 +57,7 @@ DEFAULT_INSTRUCTION = (
     "Mention subject, setting, mood, and style."
 )
 
-app = FastAPI(title="ImagineFlow API", version="0.1.0")
+app = FastAPI(title="ImagineFlow API", version="0.2.0")
 
 # CORS: when frontend is deployed separately we still want it to reach us.
 allow_origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
@@ -67,6 +67,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# v2 routers carry the Firebase-authed, two-tier-quota mobile + web flows.
+# We import them lazily so a missing Firebase config doesn't break the legacy
+# /api/caption endpoint that the existing Vite frontend relies on.
+try:
+    from .routers import me as _me_router  # noqa: WPS433
+    from .routers import v2 as _v2_router  # noqa: WPS433
+
+    app.include_router(_v2_router.router)
+    app.include_router(_me_router.router)
+except Exception:  # pragma: no cover - happens only when firebase deps absent
+    logger.exception(
+        "Failed to register v2 routers; legacy endpoints still available"
+    )
 
 
 class CaptionRequest(BaseModel):
