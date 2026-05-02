@@ -44,12 +44,15 @@ def get_usage(uid: str) -> int:
     return int(data.get("images_used", 0))
 
 
-def reserve_slot(uid: str, daily_limit: int) -> int:
+def reserve_slot(uid: str, daily_limit: int) -> tuple[int, str]:
     """Atomically check the quota and reserve one slot.
 
-    Returns the post-increment usage. Raises :class:`QuotaExceeded` if the
-    user has already hit their limit. Use :func:`release_slot` to roll back
-    if the downstream API call fails after this returns.
+    Returns ``(new_used, date_key)`` — the post-increment usage and the
+    UTC date string that was actually incremented. Callers that need to
+    later release the slot (e.g. on upstream API failure) should pass
+    ``date_key`` to :func:`release_slot` so the decrement targets the
+    same document even if UTC midnight was crossed in between. Raises
+    :class:`QuotaExceeded` if the user has already hit their limit.
     """
     db = get_firestore()
     date_key = today_key()
@@ -72,15 +75,24 @@ def reserve_slot(uid: str, daily_limit: int) -> int:
         )
         return new_used
 
-    return _txn(db.transaction())
+    new_used = _txn(db.transaction())
+    return new_used, date_key
 
 
-def release_slot(uid: str) -> None:
-    """Roll back a previously reserved slot. Called when the upstream API
-    request fails so the user isn't charged for a non-result.
+def release_slot(uid: str, date_key: str | None = None) -> None:
+    """Roll back a previously reserved slot.
+
+    Pass the ``date_key`` returned by :func:`reserve_slot` so the
+    decrement targets the same document the reservation incremented —
+    otherwise a long-running request that crosses UTC midnight would
+    decrement the *next* day's counter (or no document at all),
+    permanently leaking a slot from yesterday's quota. If ``date_key``
+    is ``None`` we fall back to today, which matches the legacy single-
+    day behaviour.
     """
     db = get_firestore()
-    date_key = today_key()
+    if date_key is None:
+        date_key = today_key()
     ref = db.collection("daily_usage").document(_doc_id(uid, date_key))
 
     # Best-effort decrement. Floor to 0 inside a transaction in case the
