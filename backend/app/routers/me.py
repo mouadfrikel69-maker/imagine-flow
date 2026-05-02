@@ -19,12 +19,16 @@ from pydantic import BaseModel, Field
 
 from ..auth import CurrentUser, CurrentUserDep
 from ..crypto import encrypt_key
-from ..firebase_app import get_firestore
+from ..firebase_app import get_realtime_db
 from ..pollinations import validate_key
 from ..quota import get_usage
 
 logger = logging.getLogger("imagine-flow.me")
 router = APIRouter(prefix="/api/v2/me", tags=["me"])
+
+
+def _profile_ref(uid: str):  # noqa: ANN202 — RTDB Reference
+    return get_realtime_db().reference(f"user_profiles/{uid}")
 
 
 class MeResponse(BaseModel):
@@ -66,13 +70,11 @@ async def setup_pollinations(
             status.HTTP_400_BAD_REQUEST,
             "That Pollinations API key didn't work. Double-check it.",
         )
-    db = get_firestore()
-    db.collection("user_profile").document(user.uid).set(
+    _profile_ref(user.uid).update(
         {
             "auth_method": "pollinations",
             "pollinations_api_key": encrypt_key(req.pollinations_key),
-        },
-        merge=True,
+        }
     )
     return {"ok": True}
 
@@ -87,22 +89,17 @@ async def upgrade_pollinations(
             status.HTTP_400_BAD_REQUEST,
             "That Pollinations API key didn't work. Double-check it.",
         )
-    db = get_firestore()
-    db.collection("user_profile").document(user.uid).set(
+    _profile_ref(user.uid).update(
         {
             "auth_method": "pollinations",
             "pollinations_api_key": encrypt_key(req.pollinations_key),
             "dismissed_pollinations_upsell": True,
-        },
-        merge=True,
+        }
     )
     return {"ok": True}
 
 
 @router.post("/dismiss-upsell")
 def dismiss_upsell(user: CurrentUser = CurrentUserDep) -> dict[str, bool]:
-    db = get_firestore()
-    db.collection("user_profile").document(user.uid).set(
-        {"dismissed_pollinations_upsell": True}, merge=True
-    )
+    _profile_ref(user.uid).update({"dismissed_pollinations_upsell": True})
     return {"ok": True}

@@ -34,23 +34,34 @@ mobile/
 2. In **Build → Authentication → Sign-in method**, enable:
    - **Email/Password**
    - **Google** — pick a support email and save.
-3. In **Build → Firestore Database → Create database**:
-   - Start in **production mode**.
-   - Pick a region close to your users.
+3. In **Build → Realtime Database → Create database**:
+   - Pick a region close to your users (e.g. `europe-west1`,
+     `us-central1`).
+   - Start in **locked mode**.
+   - After it provisions, copy the **database URL** at the top of the
+     page — it will look like
+     `https://<project>-default-rtdb.firebaseio.com` or
+     `https://<project>-default-rtdb.<region>.firebasedatabase.app`. You'll
+     paste it as `FIREBASE_DATABASE_URL` on Render.
    - Open the **Rules** tab and paste:
-     ```
-     rules_version = '2';
-     service cloud.firestore {
-       match /databases/{database}/documents {
-         match /{document=**} {
-           // The mobile app talks to Firestore via the FastAPI backend (which
-           // uses the Admin SDK and bypasses these rules), so we deny direct
-           // client access. Adjust if you ever go client-direct.
-           allow read, write: if false;
-         }
+     ```json
+     {
+       "rules": {
+         ".read": false,
+         ".write": false
        }
      }
      ```
+     The mobile app talks to RTDB via the FastAPI backend (which uses the
+     Admin SDK and bypasses these rules), so we deny direct client
+     access. Adjust later if you ever go client-direct.
+
+   > **Why Realtime Database, not Firestore?** Since late 2024 Google
+   > Cloud requires billing to be enabled to *create* a Firestore
+   > database, even on Firebase's free Spark plan. Realtime Database is
+   > unaffected and stays fully free on Spark. The data shape this app
+   > needs (per-uid profile + per-uid-per-day counter) maps cleanly to
+   > RTDB's tree.
 4. In **Project settings → General**, scroll to **Your apps**, click the
    web icon (`</>`), register an app called `ImagineFlow`. Copy the
    `firebaseConfig` values — you'll paste them into `.env` below.
@@ -110,9 +121,10 @@ The "logic" the user originally asked about lives in three places:
    `lib/api.ts` attaches the resulting Firebase ID token to every API call as
    `Authorization: Bearer <token>`.
 2. **Backend** — `app/auth.py` verifies that token with the Firebase Admin
-   SDK, then loads the user's `user_profile` doc from Firestore. The doc
-   carries `auth_method` (one of `google`, `email`, `pollinations`) and an
-   encrypted `pollinations_api_key` (for tier-2 users).
+   SDK, then loads the user's `user_profiles/{uid}` node from Realtime
+   Database. The node carries `auth_method` (one of `google`, `email`,
+   `pollinations`) and an encrypted `pollinations_api_key` (for tier-2
+   users).
 3. **Routing** — `app/routers/v2.py::pick_key()` is the ~3-line core:
    ```python
    def pick_key(user):
@@ -120,8 +132,10 @@ The "logic" the user originally asked about lives in three places:
            return DEV_POLLINATIONS_API_KEY        # 6/day
        return decrypt_key(user.pollinations_api_key)  # 20/day
    ```
-   The daily counter (`daily_usage` collection in Firestore) blocks the
-   request with HTTP 429 once the user hits their tier's limit.
+   The daily counter (`daily_usage/{uid}/{YYYY-MM-DD}` in Realtime
+   Database) blocks the request with HTTP 429 once the user hits their
+   tier's limit. Reads/increments use RTDB transactions so concurrent
+   requests can't slip past the cap.
 
 ## How upgrades work
 

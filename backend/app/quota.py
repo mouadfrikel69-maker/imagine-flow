@@ -1,21 +1,22 @@
-"""Daily generation quota — counted in Firestore.
+"""Daily generation quota — counted in Firebase Realtime Database.
 
-Each user has at most one document per UTC day::
+Each user has at most one counter node per UTC day::
 
-    daily_usage/{uid}_{YYYY-MM-DD}  →  {uid, date, images_used}
+    daily_usage/{uid}/{YYYY-MM-DD}/images_used  →  <int>
 
-We use a Firestore transaction so the read + check + increment all happen
-atomically — concurrent requests can't both observe ``used=5`` and both
-slip past a ``5/6`` limit. The document keys themselves act as TTL anchors;
-we don't bother deleting historical rows since they're tiny.
+We use RTDB's :meth:`Reference.transaction` so the read + check + increment
+all happen atomically — concurrent requests can't both observe ``used=5`` and
+both slip past a ``5/6`` limit. The date-keyed nodes themselves act as TTL
+anchors; we don't bother deleting historical rows since they're tiny.
+
+This module previously used Firestore. We migrated to RTDB because new
+Firestore databases now require Google Cloud billing to be enabled (a
+late-2024 GCP-side policy change), even when staying inside Spark-tier free
+quotas. RTDB is unaffected and remains fully usable on the free plan.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
-
-from google.cloud.firestore import Increment, transactional
-
-from .firebase_app import get_firestore
 
 
 class QuotaExceeded(Exception):
@@ -31,17 +32,19 @@ def today_key() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
-def _doc_id(uid: str, date_key: str) -> str:
-    return f"{uid}_{date_key}"
+def _counter_ref(uid: str, date_key: str):  # noqa: ANN202 — RTDB Reference
+    """Return the RTDB reference for a user's per-day counter node."""
+    from .firebase_app import get_realtime_db
+
+    return get_realtime_db().reference(
+        f"daily_usage/{uid}/{date_key}/images_used"
+    )
 
 
 def get_usage(uid: str) -> int:
-    db = get_firestore()
-    snap = db.collection("daily_usage").document(_doc_id(uid, today_key())).get()
-    if not snap.exists:
-        return 0
-    data = snap.to_dict() or {}
-    return int(data.get("images_used", 0))
+    """Return the user's image-generation count for the current UTC day."""
+    val = _counter_ref(uid, today_key()).get()
+    return int(val or 0)
 
 
 def reserve_slot(uid: str, daily_limit: int) -> tuple[int, str]:
@@ -51,78 +54,66 @@ def reserve_slot(uid: str, daily_limit: int) -> tuple[int, str]:
     UTC date string that was actually incremented. Callers that need to
     later release the slot (e.g. on upstream API failure) should pass
     ``date_key`` to :func:`release_slot` so the decrement targets the
-    same document even if UTC midnight was crossed in between. Raises
+    same node even if UTC midnight was crossed in between. Raises
     :class:`QuotaExceeded` if the user has already hit their limit.
-    """
-    db = get_firestore()
-    date_key = today_key()
-    ref = db.collection("daily_usage").document(_doc_id(uid, date_key))
 
-    @transactional
-    def _txn(transaction):
-        snap = ref.get(transaction=transaction)
-        used = 0
-        if snap.exists:
-            data = snap.to_dict() or {}
-            used = int(data.get("images_used", 0))
+    The atomicity is provided by :meth:`Reference.transaction`. If two
+    requests race, RTDB serializes them: the second one's update
+    function sees the first's incremented value and either accepts the
+    new total or raises :class:`QuotaExceeded` cleanly.
+    """
+    date_key = today_key()
+    ref = _counter_ref(uid, date_key)
+
+    def _txn(current: int | None) -> int:
+        used = int(current or 0)
         if used >= daily_limit:
             raise QuotaExceeded(used, daily_limit)
-        new_used = used + 1
-        transaction.set(
-            ref,
-            {"uid": uid, "date": date_key, "images_used": new_used},
-            merge=True,
-        )
-        return new_used
+        return used + 1
 
-    new_used = _txn(db.transaction())
-    return new_used, date_key
+    new_used = ref.transaction(_txn)
+    return int(new_used or 0), date_key
 
 
 def release_slot(uid: str, date_key: str | None = None) -> None:
     """Roll back a previously reserved slot.
 
     Pass the ``date_key`` returned by :func:`reserve_slot` so the
-    decrement targets the same document the reservation incremented —
+    decrement targets the same node the reservation incremented —
     otherwise a long-running request that crosses UTC midnight would
-    decrement the *next* day's counter (or no document at all),
+    decrement the *next* day's counter (or no node at all),
     permanently leaking a slot from yesterday's quota. If ``date_key``
     is ``None`` we fall back to today, which matches the legacy single-
     day behaviour.
+
+    Best-effort decrement: floors at 0 inside the transaction in case
+    the counter is already 0 (e.g. someone manually cleared it).
     """
-    db = get_firestore()
     if date_key is None:
         date_key = today_key()
-    ref = db.collection("daily_usage").document(_doc_id(uid, date_key))
+    ref = _counter_ref(uid, date_key)
 
-    # Best-effort decrement. Floor to 0 inside a transaction in case the
-    # counter is already 0 (e.g. someone manually cleared it).
-    @transactional
-    def _txn(transaction):
-        snap = ref.get(transaction=transaction)
-        if not snap.exists:
-            return
-        data = snap.to_dict() or {}
-        used = int(data.get("images_used", 0))
+    def _txn(current: int | None) -> int:
+        # The RTDB Admin SDK's set_if_unchanged rejects ``None`` values
+        # outright, so a "do nothing" branch must still return an int.
+        # Returning 0 is semantically equivalent to the old Firestore
+        # early-return: if the node was already 0 the write is a true
+        # no-op; if it was missing entirely we materialize it at 0 which
+        # is the floor we'd want for any subsequent decrement anyway.
+        used = int(current or 0)
         if used <= 0:
-            return
-        transaction.set(
-            ref,
-            {"uid": uid, "date": date_key, "images_used": used - 1},
-            merge=True,
-        )
+            return 0
+        return used - 1
 
-    _txn(db.transaction())
+    ref.transaction(_txn)
 
 
 def increment_usage(uid: str) -> None:
     """Legacy non-atomic increment, kept for backward compat. Prefer
     :func:`reserve_slot` for new code.
+
+    On RTDB this is implemented with a transaction since the SDK has no
+    server-side ``Increment`` primitive.
     """
-    db = get_firestore()
-    date_key = today_key()
-    ref = db.collection("daily_usage").document(_doc_id(uid, date_key))
-    ref.set(
-        {"uid": uid, "date": date_key, "images_used": Increment(1)},
-        merge=True,
-    )
+    ref = _counter_ref(uid, today_key())
+    ref.transaction(lambda current: int(current or 0) + 1)
