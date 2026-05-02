@@ -7,7 +7,8 @@ The "logic" the user originally asked about lives in :func:`pick_key` — three
 lines: if the user signed in with Google or email, use the developer's shared
 ``DEV_POLLINATIONS_API_KEY`` env var (limit 6/day). Otherwise decrypt the
 user's own stored key (limit 20/day). The daily counter is tracked in
-Firestore so concurrent requests can't race past the limit.
+Firebase Realtime Database via :func:`reserve_slot` so concurrent requests
+can't race past the limit.
 """
 from __future__ import annotations
 
@@ -62,12 +63,13 @@ def pick_key(user: CurrentUser) -> str:
 def _reserve_quota(user: CurrentUser) -> str:
     """Race-safe quota check + reservation.
 
-    Atomically increments the user's daily counter inside a Firestore
-    transaction. If we've already hit the limit the transaction raises
-    :class:`QuotaExceeded` and we surface a 429 to the client *without*
-    incrementing. Returns the UTC date key that was incremented — callers
-    must pass it to :func:`release_slot` if the downstream API call fails
-    so the rollback targets the same document even across UTC midnight.
+    Atomically increments the user's daily counter inside a Realtime
+    Database transaction. If we've already hit the limit the transaction
+    raises :class:`QuotaExceeded` and we surface a 429 to the client
+    *without* incrementing. Returns the UTC date key that was incremented
+    — callers must pass it to :func:`release_slot` if the downstream API
+    call fails so the rollback targets the same node even across UTC
+    midnight.
     """
     try:
         _new_used, date_key = reserve_slot(user.uid, user.daily_limit)
@@ -83,7 +85,7 @@ def _safe_release(uid: str, date_key: str) -> None:
     """Best-effort slot rollback that swallows its own errors.
 
     The caller is already in an exception handler about to raise an
-    intentional :class:`HTTPException` (typically a 502). If Firestore is
+    intentional :class:`HTTPException` (typically a 502). If RTDB is
     transiently unavailable the release would otherwise propagate and
     mask the upstream failure with a generic 500, hiding the real cause
     from clients. We log and continue — a leaked quota slot is far less

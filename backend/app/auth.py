@@ -2,18 +2,18 @@
 
 Mobile/web clients send ``Authorization: Bearer <Firebase ID token>``. We verify
 it with the Firebase Admin SDK, then look up (or create) the user's profile
-document in Firestore.
+node in Realtime Database (``user_profiles/{uid}``).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import Depends, Header, HTTPException, status  # noqa: F401  (Depends re-exported below)
 from firebase_admin import auth as firebase_auth
-from google.cloud.firestore import SERVER_TIMESTAMP
 
-from .firebase_app import get_firestore
+from .firebase_app import get_realtime_db
 
 AuthMethod = Literal["google", "email", "pollinations"]
 
@@ -54,13 +54,15 @@ def _detect_auth_method(decoded: dict) -> AuthMethod:
 
 
 def _ensure_profile(uid: str, decoded: dict) -> dict:
-    db = get_firestore()
-    ref = db.collection("user_profile").document(uid)
-    snap = ref.get()
-    if snap.exists:
-        return snap.to_dict() or {}
+    ref = get_realtime_db().reference(f"user_profiles/{uid}")
+    existing = ref.get()
+    if isinstance(existing, dict) and existing:
+        return existing
 
-    # First time we've seen this user — create their profile row.
+    # First time we've seen this user — create their profile node.
+    # RTDB has no server-side timestamp primitive on the admin SDK that's
+    # ergonomic to use here, so we capture the current UTC instant client-
+    # side. The value is informational only — nothing in the app reads it.
     initial = {
         "uid": uid,
         "email": decoded.get("email"),
@@ -68,7 +70,7 @@ def _ensure_profile(uid: str, decoded: dict) -> dict:
         "auth_method": _detect_auth_method(decoded),
         "pollinations_api_key": None,
         "dismissed_pollinations_upsell": False,
-        "created_at": SERVER_TIMESTAMP,
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     ref.set(initial)
     return initial
@@ -80,7 +82,7 @@ def current_user(
     """FastAPI dependency: verify the Firebase ID token and load the profile.
 
     Declared as a regular ``def`` (not ``async def``) on purpose:
-    Firebase Admin's ``verify_id_token`` and Firestore ``get`` / ``set`` are
+    Firebase Admin's ``verify_id_token`` and RTDB ``get`` / ``set`` are
     synchronous network calls. If we declared this ``async def`` FastAPI
     would run it directly on the event loop, blocking every concurrent
     request for the duration of the round-trip. As a sync def, FastAPI
