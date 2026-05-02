@@ -93,10 +93,16 @@ def release_slot(uid: str, date_key: str | None = None) -> None:
         date_key = today_key()
     ref = _counter_ref(uid, date_key)
 
-    def _txn(current: int | None) -> int | None:
+    def _txn(current: int | None) -> int:
+        # The RTDB Admin SDK's set_if_unchanged rejects ``None`` values
+        # outright, so a "do nothing" branch must still return an int.
+        # Returning 0 is semantically equivalent to the old Firestore
+        # early-return: if the node was already 0 the write is a true
+        # no-op; if it was missing entirely we materialize it at 0 which
+        # is the floor we'd want for any subsequent decrement anyway.
         used = int(current or 0)
         if used <= 0:
-            return current  # no-op, RTDB skips the write
+            return 0
         return used - 1
 
     ref.transaction(_txn)
